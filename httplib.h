@@ -127,9 +127,6 @@
 #endif //_CRT_NONSTDC_NO_DEPRECATE
 
 #if defined(_MSC_VER)
-#if _MSC_VER < 1900
-#error Sorry, Visual Studio versions prior to 2015 are not supported
-#endif
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -498,8 +495,10 @@ struct Response {
   Response() = default;
   Response(const Response &) = default;
   Response &operator=(const Response &) = default;
+#if defined(_MSC_VER) && _MSC_VER >= 1900
   Response(Response &&) = default;
   Response &operator=(Response &&) = default;
+#endif
   ~Response() {
     if (content_provider_resource_releaser_) {
       content_provider_resource_releaser_(content_provider_success_);
@@ -1242,7 +1241,9 @@ public:
                   const std::string &client_cert_path,
                   const std::string &client_key_path);
 
+#if defined(_MSC_VER) && _MSC_VER >= 1900
   Client(Client &&) = default;
+#endif
 
   ~Client();
 
@@ -1602,7 +1603,11 @@ inline ssize_t Stream::write_format(const char *fmt, const Args &...args) {
   const auto bufsiz = 2048;
   std::array<char, bufsiz> buf{};
 
+#if defined(_MSC_VER) && _MSC_VER >= 1900
   auto sn = snprintf(buf.data(), buf.size() - 1, fmt, args...);
+#else
+  auto sn = _snprintf_s(buf.data(), buf.size(), buf.size() - 1, fmt, args...);
+#endif
   if (sn <= 0) { return sn; }
 
   auto n = static_cast<size_t>(sn);
@@ -1613,7 +1618,11 @@ inline ssize_t Stream::write_format(const char *fmt, const Args &...args) {
     while (n >= glowable_buf.size() - 1) {
       glowable_buf.resize(glowable_buf.size() * 2);
       n = static_cast<size_t>(
+#if defined(_MSC_VER) && _MSC_VER >= 1900
           snprintf(&glowable_buf[0], glowable_buf.size() - 1, fmt, args...));
+#else
+          _snprintf_s(&glowable_buf[0], glowable_buf.size(), glowable_buf.size() - 1, fmt, args...));
+#endif
     }
     return write(&glowable_buf[0], n);
   } else {
@@ -2132,7 +2141,11 @@ inline std::string encode_url(const std::string &s) {
       if (c >= 0x80) {
         result += '%';
         char hex[4];
+#if defined(_MSC_VER) && _MSC_VER >= 1900
         auto len = snprintf(hex, sizeof(hex) - 1, "%02X", c);
+#else
+        auto len = _snprintf_s(hex, sizeof(hex), sizeof(hex) - 1, "%02X", c);
+#endif
         assert(len == 2);
         result.append(hex, static_cast<size_t>(len));
       } else {
@@ -2937,23 +2950,77 @@ inline void get_remote_ip_and_port(socket_t sock, std::string &ip, int &port) {
   }
 }
 
-inline constexpr unsigned int str2tag_core(const char *s, size_t l,
-                                           unsigned int h) {
-  return (l == 0) ? h
-                  : str2tag_core(s + 1, l - 1,
-                                 (h * 33) ^ static_cast<unsigned char>(*s));
-}
-
-inline unsigned int str2tag(const std::string &s) {
-  return str2tag_core(s.data(), s.size(), 0);
-}
 
 namespace udl {
+  struct strless {
+    bool operator()(char const *a, char const *b) const {
+      return std::strcmp(a, b) < 0;
+    }
+  };
 
-inline constexpr unsigned int operator"" _t(const char *s, size_t l) {
-  return str2tag_core(s, l, 0);
+inline const char* _t(const char *s) {
+  static const std::multimap<const char*, const char*, strless> types = {
+    { "css", "text/css" },
+    { "csv", "text/csv" },
+    { "htm", "text/html" },
+    { "html", "text/html" },
+    { "js", "text/javascript" },
+    { "mjs", "text/javascript" },
+    { "txt", "text/plain" },
+    { "vtt", "text/vtt" },
+
+    { "apng", "image/apng" },
+    { "avif", "image/avif" },
+    { "bmp", "image/bmp" },
+    { "gif", "image/gif" },
+    { "png", "image/png" },
+    { "svg", "image/svg+xml" },
+    { "webp", "image/webp" },
+    { "ico", "image/x-icon" },
+    { "tif", "image/tiff" },
+    { "tiff", "image/tiff" },
+    { "jpg", "image/jpeg" },
+    { "jpeg", "image/jpeg" },
+
+    { "mp4", "video/mp4" },
+    { "mpeg", "video/mpeg" },
+    { "webm", "video/webm" },
+
+    { "mp3", "audio/mp3" },
+    { "mpga", "audio/mpeg" },
+    { "weba", "audio/webm" },
+    { "wav", "audio/wave" },
+
+    { "otf", "font/otf" },
+    { "ttf", "font/ttf" },
+    { "woff", "font/woff" },
+    { "woff2", "font/woff2" },
+
+    { "7z", "application/x-7z-compressed" },
+    { "atom", "application/atom+xml" },
+    { "pdf", "application/pdf" },
+    { "json", "application/json" },
+    { "rss", "application/rss+xml" },
+    { "tar", "application/x-tar" },
+    { "xht", "application/xhtml+xml" },
+    { "xhtml", "application/xhtml+xml" },
+    { "xslt", "application/xslt+xml" },
+    { "xml", "application/xml" },
+    { "gz", "application/gzip" },
+    { "zip", "application/zip" },
+    { "wasm", "application/wasm" },
+  };
+
+  auto found = types.find(s);
+  if (found == types.cend())
+    return nullptr;
+
+  return found->second;
 }
 
+inline const char* _t(const std::string &s) {
+  return udl::_t(s.data());
+}
 } // namespace udl
 
 inline const char *
@@ -2964,60 +3031,7 @@ find_content_type(const std::string &path,
   auto it = user_data.find(ext);
   if (it != user_data.end()) { return it->second.c_str(); }
 
-  using udl::operator""_t;
-
-  switch (str2tag(ext)) {
-  default: return nullptr;
-  case "css"_t: return "text/css";
-  case "csv"_t: return "text/csv";
-  case "htm"_t:
-  case "html"_t: return "text/html";
-  case "js"_t:
-  case "mjs"_t: return "text/javascript";
-  case "txt"_t: return "text/plain";
-  case "vtt"_t: return "text/vtt";
-
-  case "apng"_t: return "image/apng";
-  case "avif"_t: return "image/avif";
-  case "bmp"_t: return "image/bmp";
-  case "gif"_t: return "image/gif";
-  case "png"_t: return "image/png";
-  case "svg"_t: return "image/svg+xml";
-  case "webp"_t: return "image/webp";
-  case "ico"_t: return "image/x-icon";
-  case "tif"_t: return "image/tiff";
-  case "tiff"_t: return "image/tiff";
-  case "jpg"_t:
-  case "jpeg"_t: return "image/jpeg";
-
-  case "mp4"_t: return "video/mp4";
-  case "mpeg"_t: return "video/mpeg";
-  case "webm"_t: return "video/webm";
-
-  case "mp3"_t: return "audio/mp3";
-  case "mpga"_t: return "audio/mpeg";
-  case "weba"_t: return "audio/webm";
-  case "wav"_t: return "audio/wave";
-
-  case "otf"_t: return "font/otf";
-  case "ttf"_t: return "font/ttf";
-  case "woff"_t: return "font/woff";
-  case "woff2"_t: return "font/woff2";
-
-  case "7z"_t: return "application/x-7z-compressed";
-  case "atom"_t: return "application/atom+xml";
-  case "pdf"_t: return "application/pdf";
-  case "json"_t: return "application/json";
-  case "rss"_t: return "application/rss+xml";
-  case "tar"_t: return "application/x-tar";
-  case "xht"_t:
-  case "xhtml"_t: return "application/xhtml+xml";
-  case "xslt"_t: return "application/xslt+xml";
-  case "xml"_t: return "application/xml";
-  case "gz"_t: return "application/gzip";
-  case "zip"_t: return "application/zip";
-  case "wasm"_t: return "application/wasm";
-  }
+  return udl::_t(ext);
 }
 
 inline const char *status_message(int status) {
@@ -3091,21 +3105,18 @@ inline const char *status_message(int status) {
 }
 
 inline bool can_compress_content_type(const std::string &content_type) {
-  using udl::operator""_t;
-
-  auto tag = str2tag(content_type);
-
-  switch (tag) {
-  case "image/svg+xml"_t:
-  case "application/javascript"_t:
-  case "application/json"_t:
-  case "application/xml"_t:
-  case "application/protobuf"_t:
-  case "application/xhtml+xml"_t: return true;
-
-  default:
-    return !content_type.rfind("text/", 0) && tag != "text/event-stream"_t;
-  }
+  static const auto compressable = {
+    "image/svg+xml",
+    "application/javascript",
+    "application/json",
+    "application/xml",
+    "application/protobuf",
+    "application/xhtml+xml",
+  };
+  auto tag = udl::_t(content_type);
+  auto found = std::find(std::begin(compressable), std::end(compressable), tag);
+  return found != std::end(compressable)
+    || (!content_type.rfind("text/", 0) && std::strcmp(tag, "text/event-stream") != 0);
 }
 
 inline EncodingType encoding_type(const Request &req, const Response &res) {
